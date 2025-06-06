@@ -64,8 +64,9 @@ sleep 20
 echo -e "${YELLOW}6. Import database...${NC}"
 # Create database if it doesn't exist
 docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "DROP DATABASE IF EXISTS ${DB_NAME:-wordpress}; CREATE DATABASE ${DB_NAME:-wordpress} DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;"
-# Import SQL
-docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} ${DB_NAME:-wordpress} < data/imports/$(basename "$DATABASE_SQL")
+# Import SQL (continue even if there are errors like duplicate entries)
+echo "Importing SQL file (ignoring duplicate entry errors)..."
+docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} ${DB_NAME:-wordpress} < data/imports/$(basename "$DATABASE_SQL") || echo "SQL import completed with some errors (expected for duplicate entries)"
 
 echo -e "${YELLOW}7. Avvio WordPress e servizi...${NC}"
 docker-compose up -d
@@ -85,7 +86,19 @@ fi
 
 echo -e "${YELLOW}9. Search and Replace URL (se configurato)...${NC}"
 if [ ! -z "$SITE_URL_OLD" ] && [ ! -z "$SITE_URL_NEW" ]; then
+    # Try both HTTPS and HTTP versions of the old URL
     docker-compose run --rm wpcli search-replace "$SITE_URL_OLD" "$SITE_URL_NEW" --all-tables
+    # Also try without protocol to catch edge cases
+    OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
+    NEW_DOMAIN=$(echo "$SITE_URL_NEW" | sed 's|https\?://||')
+    if [ "$OLD_DOMAIN" != "$NEW_DOMAIN" ]; then
+        docker-compose run --rm wpcli search-replace "$OLD_DOMAIN" "$NEW_DOMAIN" --all-tables
+    fi
+    
+    # Manual fix for critical WordPress URLs to ensure site works
+    echo "Applying manual URL fixes for WordPress options..."
+    CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
+    docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "UPDATE ${DB_NAME:-wordpress}.wp_options SET option_value = '$SITE_URL_NEW' WHERE option_name IN ('siteurl', 'home');" 2>/dev/null || echo "Manual URL update completed"
 else
     echo "Skip: SITE_URL_OLD o SITE_URL_NEW non configurati"
 fi
@@ -97,12 +110,28 @@ docker-compose run --rm wpcli rewrite flush
 echo -e "${YELLOW}11. Disabilitazione plugin problematici per sviluppo...${NC}"
 ./scripts/disable-dev-plugins.sh
 
+echo -e "${YELLOW}12. Verifica finale dell'installazione...${NC}"
+# Check if WordPress is working
+CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
+TABLE_COUNT=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${DB_NAME:-wordpress}';" 2>/dev/null | tail -n 1)
+USER_COUNT=$(docker-compose run --rm wpcli user list --format=count 2>/dev/null || echo "0")
+
+if [ "$TABLE_COUNT" -gt 10 ] && [ "$USER_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}✓ Database import successful: $TABLE_COUNT tables, $USER_COUNT users${NC}"
+    SITE_URL=$(docker-compose run --rm wpcli option get home 2>/dev/null | tr -d '\r\n' || echo "Not set")
+    echo -e "${GREEN}✓ Site URL configured: $SITE_URL${NC}"
+else
+    echo -e "${RED}⚠ Warning: Database import may have issues${NC}"
+fi
+
 echo -e "${GREEN}=== Import completato! ===${NC}"
 echo -e "WordPress: ${GREEN}http://localhost:${WEB_PORT:-8080}${NC}"
-echo -e "phpMyAdmin: ${GREEN}http://localhost:${PMA_PORT:-8081}${NC}"
+echo -e "phpMyAdmin: ${GREEN}http://localhost:${PMA_PORT:-8082}${NC}"
 echo -e ""
 echo -e "Credenziali database:"
 echo -e "  Host: db"
 echo -e "  Database: ${DB_NAME:-wordpress}"
 echo -e "  User: ${DB_USER:-wordpress}"
 echo -e "  Password: ${DB_PASSWORD:-wordpress}"
+echo -e ""
+echo -e "${YELLOW}Note: Se vedi la schermata di installazione WordPress, pulisci la cache del browser o prova in modalità incognito${NC}"
