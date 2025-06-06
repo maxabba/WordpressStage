@@ -60,6 +60,8 @@ Automatically disables development-hostile plugins:
 - **Error-tolerant imports** (continues despite duplicate entries)
 - **Automatic wp-config.php fixing** for Docker environment
 - **Database validation** and health checks
+- **Cache compatibility** - automatically handles Memcached/Redis conflicts
+- **Object cache management** - fixes problematic cache configurations
 
 ## 📋 **System Requirements**
 
@@ -121,6 +123,7 @@ WordPress Containers:
 ├── 🌐 Nginx (Web Server)           # Port 8080
 ├── 🐘 PHP-FPM (WordPress Engine)   # Internal
 ├── 🗄️ MySQL 8.0 (Database)        # Port 3306 (internal)
+├── 🚀 Memcached (Object Cache)     # Port 11211 (internal)
 ├── 📊 phpMyAdmin (DB Management)   # Port 8082
 └── ⚡ WP-CLI (Command Line Tools)  # On-demand
 ```
@@ -330,6 +333,64 @@ command: >
   --max-connections=200
 ```
 
+## 🚀 **Cache Management**
+
+### **Automatic Cache Handling**
+WordPress Docker Stage automatically manages cache-related issues:
+
+#### **Memcached Support**
+```bash
+# Memcached is automatically included and configured
+# No manual setup required - works out of the box
+
+# Check Memcached status
+docker-compose ps memcached
+
+# View Memcached logs
+docker-compose logs memcached
+```
+
+#### **Object Cache Compatibility**
+```bash
+# Automatic fixes for problematic cache files
+# The system handles:
+# - object-cache.php conflicts
+# - Memcache class not found errors
+# - Empty advanced-cache.php files
+# - Cache directory cleanup
+
+# Manual cache troubleshooting
+./scripts/fix-cache-issues.sh
+```
+
+#### **Cache Configuration**
+```bash
+# Environment variables for cache control
+MEMCACHED_VERSION=alpine    # Memcached version
+WP_CACHE=false             # Disable problematic cache plugins
+
+# WordPress cache constants (auto-configured)
+WP_CACHE_KEY_SALT          # Unique cache keys per site
+MEMCACHED_HOST             # Points to memcached:11211
+```
+
+### **Cache Troubleshooting**
+```bash
+# If you encounter cache-related errors:
+
+# 1. Run the cache fix script
+./scripts/fix-cache-issues.sh
+
+# 2. Restart containers
+docker-compose restart
+
+# 3. Clear WordPress cache
+docker-compose run --rm wpcli cache flush
+
+# 4. Check object cache status
+docker-compose run --rm wpcli eval "var_dump(wp_using_ext_object_cache());"
+```
+
 ## 🐛 **Troubleshooting Guide**
 
 ### **Common Issues & Solutions**
@@ -378,6 +439,32 @@ sudo systemctl start docker  # Linux
 # Error: Out of disk space
 docker system prune -f
 ./stop-and-clean.sh  # Option 4: Full cleanup + Docker prune
+```
+
+#### **🚀 Cache-Related Errors**
+```bash
+# Error: Class "Memcache" not found
+# Solution: Run the cache fix script
+./scripts/fix-cache-issues.sh
+
+# Error: object-cache.php causing fatal errors
+# Solution: Backup and remove problematic cache file
+mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.backup
+docker-compose restart wordpress
+
+# Error: WordPress shows critical error with cache
+# Solution: Complete cache cleanup
+./scripts/fix-cache-issues.sh
+docker-compose restart
+
+# Error: WP-CLI cache commands fail
+# Solution: Check Memcached connectivity
+docker-compose run --rm wpcli eval "
+if (class_exists('Memcached')) {
+    echo 'Memcached available';
+} else {
+    echo 'Memcached not available';
+}"
 ```
 
 ### **Performance Optimization**

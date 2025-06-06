@@ -40,5 +40,9 @@ docker-compose.override.yml.local
 *.temp
 .cache/
 
+# Cache backup files
+*object-cache.php.backup.*
+*advanced-cache.php.backup.*
+
 # CLAUDE.md is for local development reference
 CLAUDE.md

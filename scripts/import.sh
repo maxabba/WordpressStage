@@ -144,10 +144,29 @@ else
     echo "Skipping cache/rewrite flush (database appears empty: $TABLE_COUNT tables)"
 fi
 
-echo -e "${YELLOW}11. Disabilitazione plugin problematici per sviluppo...${NC}"
+echo -e "${YELLOW}11. Gestione file di cache e problematici...${NC}"
+# Gestione file di cache problematici prima di disabilitare i plugin
+if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
+    echo "Trovato object-cache.php, verifica compatibilità..."
+    # Backup e rimozione se problematico
+    if grep -q "class.*Memcache\|new.*Memcache" data/wordpress/wp-content/object-cache.php 2>/dev/null; then
+        echo "Object cache potenzialmente problematico, creazione backup..."
+        mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.backup.$(date +%s)
+        echo "✓ object-cache.php salvato in backup"
+    fi
+fi
+
+# Rimozione file advanced-cache.php vuoti
+if [ -f "data/wordpress/wp-content/advanced-cache.php" ] && [ ! -s "data/wordpress/wp-content/advanced-cache.php" ]; then
+    echo "Rimozione advanced-cache.php vuoto..."
+    rm -f data/wordpress/wp-content/advanced-cache.php
+    echo "✓ advanced-cache.php rimosso"
+fi
+
+echo -e "${YELLOW}12. Disabilitazione plugin problematici per sviluppo...${NC}"
 ./scripts/disable-dev-plugins.sh
 
-echo -e "${YELLOW}12. Verifica finale dell'installazione...${NC}"
+echo -e "${YELLOW}13. Verifica finale dell'installazione...${NC}"
 # Use previously set variables and get user count
 USER_COUNT=$(docker-compose run --rm wpcli user list --format=count 2>/dev/null || echo "0")
 

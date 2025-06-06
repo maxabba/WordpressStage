@@ -17,7 +17,17 @@ services:
       - wordpress-network
     command: '--default-authentication-plugin=mysql_native_password'
 
-  # WordPress con PHP-FPM
+  # Memcached for WordPress caching
+  memcached:
+    image: memcached:${MEMCACHED_VERSION:-alpine}
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_memcached
+    restart: unless-stopped
+    command: memcached -m 64 -p 11211 -u memcache -l 0.0.0.0
+    networks:
+      - wordpress-network
+
+  # WordPress con PHP-FPM e supporto cache
   wordpress:
     image: wordpress:php${PHP_VERSION:-8.1}-fpm
     platform: linux/amd64  # Compatibilità M1
@@ -25,6 +35,7 @@ services:
     restart: unless-stopped
     depends_on:
       - db
+      - memcached
     environment:
       WORDPRESS_DB_HOST: db:3306
       WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
@@ -32,9 +43,11 @@ services:
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
       WORDPRESS_DEBUG: ${WP_DEBUG:-true}
       WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX:-wp_}
+      MEMCACHED_HOST: memcached:11211
     volumes:
       - ./data/wordpress:/var/www/html
       - ./configs/php/custom.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+      - ./scripts:/scripts:ro
     networks:
       - wordpress-network
 
