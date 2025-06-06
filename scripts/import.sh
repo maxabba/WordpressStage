@@ -42,7 +42,7 @@ rm -rf data/mysql/*
 rm -rf data/imports/*
 
 echo -e "${YELLOW}2. Estrazione WordPress...${NC}"
-unzip -q "$WORDPRESS_ZIP" -d data/wordpress/
+unzip -o -q "$WORDPRESS_ZIP" -d data/wordpress/
 # Se il zip contiene una directory root, spostiamo i file
 if [ -d data/wordpress/*/wp-content ]; then
     mv data/wordpress/*/* data/wordpress/
