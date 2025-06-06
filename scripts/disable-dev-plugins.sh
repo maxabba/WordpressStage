@@ -5,7 +5,12 @@
 
 echo "Disabling problematic plugins for development environment..."
 
-# List of plugins to disable
+# Load environment variables to check cache settings
+if [ -f .env ]; then
+    export $(cat .env | grep -v '^#' | xargs)
+fi
+
+# Base list of plugins to always disable
 PLUGINS_TO_DISABLE=(
     # Security plugins
     "wp-defender"
@@ -15,8 +20,10 @@ PLUGINS_TO_DISABLE=(
     "sucuri-scanner"
     "ithemes-security"
     "bulletproof-security"
-    
-    # Cache plugins
+)
+
+# Cache plugins - disable based on cache setting
+CACHE_PLUGINS=(
     "wp-rocket"
     "w3-total-cache"
     "wp-super-cache"
@@ -25,7 +32,28 @@ PLUGINS_TO_DISABLE=(
     "autoptimize"
     "cache-enabler"
     "hummingbird-performance"
-    
+    "wp-optimize"
+    "object-cache-pro"
+    "redis-cache"
+    "memcached"
+)
+
+# Add cache plugins to disable list if cache is disabled
+if [ "${ENABLE_MEMCACHED:-true}" = "false" ]; then
+    echo "Cache disabled - all cache plugins will be deactivated"
+    PLUGINS_TO_DISABLE+=("${CACHE_PLUGINS[@]}")
+else
+    echo "Cache enabled - only problematic cache plugins will be deactivated"
+    # Only disable the most problematic cache plugins when cache is enabled
+    PLUGINS_TO_DISABLE+=(
+        "wp-rocket"      # Often conflicts with object cache
+        "w3-total-cache" # Can cause conflicts
+        "wp-super-cache" # File-based caching conflicts
+    )
+fi
+
+# Continue with other plugins
+PLUGINS_TO_DISABLE+=(
     # Optimization plugins that can interfere
     "wp-smush-pro"
     "wp-smushit"

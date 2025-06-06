@@ -126,6 +126,24 @@ configure_environment() {
     read -p "MySQL version [$DEFAULT_MYSQL_VERSION]: " MYSQL_VERSION
     MYSQL_VERSION=${MYSQL_VERSION:-$DEFAULT_MYSQL_VERSION}
     
+    # Memcached support
+    echo ""
+    echo -e "${BLUE}Cache Configuration${NC}"
+    echo "Memcached can improve WordPress performance but may cause issues with some sites."
+    echo "Choose cache configuration:"
+    echo "  1) Enable Memcached (recommended for most sites)"
+    echo "  2) Disable all caching (safer for problematic sites)"
+    read -p "Select option [1-2, default: 1]: " CACHE_OPTION
+    CACHE_OPTION=${CACHE_OPTION:-1}
+    
+    if [ "$CACHE_OPTION" = "2" ]; then
+        ENABLE_MEMCACHED="false"
+        echo -e "${YELLOW}ℹ️  Memcached will be disabled${NC}"
+    else
+        ENABLE_MEMCACHED="true"
+        echo -e "${GREEN}✓ Memcached will be enabled${NC}"
+    fi
+    
     # Ask about old domain for search-replace
     echo ""
     echo -e "${BLUE}URL Migration (optional)${NC}"
@@ -146,6 +164,10 @@ PMA_PORT=$PMA_PORT
 PHP_VERSION=$PHP_VERSION
 MYSQL_VERSION=$MYSQL_VERSION
 WORDPRESS_VERSION=latest
+MEMCACHED_VERSION=alpine
+
+# Cache Configuration
+ENABLE_MEMCACHED=$ENABLE_MEMCACHED
 
 # Database Configuration
 DB_NAME=wordpress
@@ -188,6 +210,104 @@ clean_previous_data() {
     fi
 }
 
+# Function to handle cache disable logic
+handle_cache_disable() {
+    local wp_content="data/wordpress/wp-content"
+    
+    if [ ! -d "$wp_content" ]; then
+        echo -e "${BLUE}ℹ️  WordPress content directory not yet created - cache cleanup will happen during import${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}🔍 Scanning for problematic cache files...${NC}"
+    
+    # Check for object-cache.php
+    if [ -f "$wp_content/object-cache.php" ]; then
+        echo -e "${YELLOW}Found object-cache.php - creating backup and removing...${NC}"
+        local backup_file="$wp_content/object-cache.php.disabled.$(date +%s)"
+        mv "$wp_content/object-cache.php" "$backup_file"
+        echo -e "${GREEN}✓ Backed up to: $(basename "$backup_file")${NC}"
+    fi
+    
+    # Check for advanced-cache.php
+    if [ -f "$wp_content/advanced-cache.php" ]; then
+        if [ ! -s "$wp_content/advanced-cache.php" ]; then
+            echo -e "${YELLOW}Found empty advanced-cache.php - removing...${NC}"
+            rm -f "$wp_content/advanced-cache.php"
+            echo -e "${GREEN}✓ Removed empty advanced-cache.php${NC}"
+        else
+            echo -e "${YELLOW}Found advanced-cache.php with content - creating backup and removing...${NC}"
+            local backup_file="$wp_content/advanced-cache.php.disabled.$(date +%s)"
+            mv "$wp_content/advanced-cache.php" "$backup_file"
+            echo -e "${GREEN}✓ Backed up to: $(basename "$backup_file")${NC}"
+        fi
+    fi
+    
+    # Clean cache directories
+    echo -e "${YELLOW}🧹 Cleaning cache directories...${NC}"
+    local cache_dirs=("cache" "wp-rocket-cache" "w3tc-cache" "supercache" "wp-cache")
+    local cleaned=0
+    
+    for cache_dir in "${cache_dirs[@]}"; do
+        local full_path="$wp_content/$cache_dir"
+        if [ -d "$full_path" ]; then
+            echo "Cleaning $cache_dir..."
+            rm -rf "$full_path"
+            cleaned=$((cleaned + 1))
+        fi
+    done
+    
+    if [ $cleaned -gt 0 ]; then
+        echo -e "${GREEN}✓ Cleaned $cleaned cache directories${NC}"
+    else
+        echo -e "${BLUE}ℹ️  No cache directories found${NC}"
+    fi
+    
+    # Scan for cache plugins
+    echo -e "${YELLOW}🔍 Scanning for cache-related plugins...${NC}"
+    local plugins_dir="$wp_content/plugins"
+    local cache_plugins=()
+    
+    if [ -d "$plugins_dir" ]; then
+        # Common cache plugin patterns
+        local cache_plugin_patterns=(
+            "wp-rocket"
+            "w3-total-cache"
+            "wp-super-cache"
+            "wp-fastest-cache"
+            "litespeed-cache"
+            "cache-enabler"
+            "wp-optimize"
+            "autoptimize"
+            "smush"
+            "object-cache-pro"
+            "memcached"
+            "redis-cache"
+        )
+        
+        for pattern in "${cache_plugin_patterns[@]}"; do
+            for plugin_dir in "$plugins_dir"/*"$pattern"*; do
+                if [ -d "$plugin_dir" ]; then
+                    cache_plugins+=("$(basename "$plugin_dir")")
+                fi
+            done
+        done
+        
+        if [ ${#cache_plugins[@]} -gt 0 ]; then
+            echo -e "${YELLOW}Found cache-related plugins:${NC}"
+            for plugin in "${cache_plugins[@]}"; do
+                echo "  - $plugin"
+            done
+            echo ""
+            echo -e "${YELLOW}These plugins will be automatically disabled during import to prevent conflicts.${NC}"
+        else
+            echo -e "${GREEN}✓ No problematic cache plugins found${NC}"
+        fi
+    fi
+    
+    echo -e "${GREEN}✓ Cache disable preparation completed${NC}"
+}
+
 # Main execution
 main() {
     echo -e "${BLUE}Starting WordPress Docker Stage initialization...${NC}"
@@ -215,6 +335,18 @@ main() {
     echo -e "${YELLOW}Setting up scripts...${NC}"
     chmod +x scripts/*.sh
     echo -e "${GREEN}✓ Scripts ready${NC}"
+    
+    # Generate appropriate docker-compose configuration
+    echo -e "${YELLOW}Generating Docker configuration...${NC}"
+    ./scripts/generate-docker-compose.sh
+    echo -e "${GREEN}✓ Docker configuration ready${NC}"
+    
+    # Handle cache disable logic if needed
+    if [ "$ENABLE_MEMCACHED" = "false" ]; then
+        echo ""
+        echo -e "${YELLOW}Cache disabled - scanning for cache-related files and plugins...${NC}"
+        handle_cache_disable
+    fi
     
     # Run import
     echo ""

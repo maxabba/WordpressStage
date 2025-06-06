@@ -145,22 +145,55 @@ else
 fi
 
 echo -e "${YELLOW}11. Gestione file di cache e problematici...${NC}"
-# Gestione file di cache problematici prima di disabilitare i plugin
-if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
-    echo "Trovato object-cache.php, verifica compatibilità..."
-    # Backup e rimozione se problematico
-    if grep -q "class.*Memcache\|new.*Memcache" data/wordpress/wp-content/object-cache.php 2>/dev/null; then
-        echo "Object cache potenzialmente problematico, creazione backup..."
-        mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.backup.$(date +%s)
-        echo "✓ object-cache.php salvato in backup"
+# Check if cache is enabled in environment
+if [ "${ENABLE_MEMCACHED:-true}" = "false" ]; then
+    echo -e "${YELLOW}Cache disabled - removing all cache-related files...${NC}"
+    
+    # Remove object-cache.php completely when cache is disabled
+    if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
+        echo "Removing object-cache.php (cache disabled)..."
+        mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.disabled.$(date +%s)
+        echo "✓ object-cache.php disabled"
     fi
-fi
+    
+    # Remove advanced-cache.php when cache is disabled
+    if [ -f "data/wordpress/wp-content/advanced-cache.php" ]; then
+        echo "Removing advanced-cache.php (cache disabled)..."
+        mv data/wordpress/wp-content/advanced-cache.php data/wordpress/wp-content/advanced-cache.php.disabled.$(date +%s)
+        echo "✓ advanced-cache.php disabled"
+    fi
+    
+    # Clean cache directories
+    echo "Cleaning cache directories..."
+    local cache_dirs=("cache" "wp-rocket-cache" "w3tc-cache" "supercache" "wp-cache")
+    for cache_dir in "${cache_dirs[@]}"; do
+        if [ -d "data/wordpress/wp-content/$cache_dir" ]; then
+            rm -rf "data/wordpress/wp-content/$cache_dir"
+            echo "✓ Removed $cache_dir directory"
+        fi
+    done
+    
+    echo -e "${GREEN}✓ All cache files and directories removed${NC}"
+else
+    echo -e "${BLUE}Cache enabled - checking for compatibility issues...${NC}"
+    
+    # Gestione file di cache problematici prima di disabilitare i plugin
+    if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
+        echo "Trovato object-cache.php, verifica compatibilità..."
+        # Backup e rimozione se problematico
+        if grep -q "class.*Memcache\|new.*Memcache" data/wordpress/wp-content/object-cache.php 2>/dev/null; then
+            echo "Object cache potenzialmente problematico, creazione backup..."
+            mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.backup.$(date +%s)
+            echo "✓ object-cache.php salvato in backup"
+        fi
+    fi
 
-# Rimozione file advanced-cache.php vuoti
-if [ -f "data/wordpress/wp-content/advanced-cache.php" ] && [ ! -s "data/wordpress/wp-content/advanced-cache.php" ]; then
-    echo "Rimozione advanced-cache.php vuoto..."
-    rm -f data/wordpress/wp-content/advanced-cache.php
-    echo "✓ advanced-cache.php rimosso"
+    # Rimozione file advanced-cache.php vuoti
+    if [ -f "data/wordpress/wp-content/advanced-cache.php" ] && [ ! -s "data/wordpress/wp-content/advanced-cache.php" ]; then
+        echo "Rimozione advanced-cache.php vuoto..."
+        rm -f data/wordpress/wp-content/advanced-cache.php
+        echo "✓ advanced-cache.php rimosso"
+    fi
 fi
 
 echo -e "${YELLOW}12. Disabilitazione plugin problematici per sviluppo...${NC}"
