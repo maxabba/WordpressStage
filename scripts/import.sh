@@ -62,6 +62,9 @@ echo "Attendo che MySQL sia pronto..."
 sleep 20
 
 echo -e "${YELLOW}6. Import database...${NC}"
+# Create database if it doesn't exist
+docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "DROP DATABASE IF EXISTS ${DB_NAME:-wordpress}; CREATE DATABASE ${DB_NAME:-wordpress} DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;"
+# Import SQL
 docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} ${DB_NAME:-wordpress} < data/imports/$(basename "$DATABASE_SQL")
 
 echo -e "${YELLOW}7. Avvio WordPress e servizi...${NC}"
@@ -69,6 +72,16 @@ docker-compose up -d
 
 echo -e "${YELLOW}8. Attendo che WordPress sia pronto...${NC}"
 sleep 10
+
+echo -e "${YELLOW}8.1. Configurazione database in wp-config.php...${NC}"
+# Fix wp-config.php database settings
+if [ -f "data/wordpress/wp-config.php" ]; then
+    sed -i.bak "s/define( 'DB_HOST', '.*' );/define( 'DB_HOST', 'db' );/" data/wordpress/wp-config.php
+    sed -i.bak "s/define( 'DB_NAME', '.*' );/define( 'DB_NAME', '${DB_NAME:-wordpress}' );/" data/wordpress/wp-config.php
+    sed -i.bak "s/define( 'DB_USER', '.*' );/define( 'DB_USER', '${DB_USER:-wordpress}' );/" data/wordpress/wp-config.php
+    sed -i.bak "s/define( 'DB_PASSWORD', '.*' );/define( 'DB_PASSWORD', '${DB_PASSWORD:-wordpress}' );/" data/wordpress/wp-config.php
+    echo "Database configuration updated"
+fi
 
 echo -e "${YELLOW}9. Search and Replace URL (se configurato)...${NC}"
 if [ ! -z "$SITE_URL_OLD" ] && [ ! -z "$SITE_URL_NEW" ]; then
