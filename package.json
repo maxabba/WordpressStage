@@ -1,0 +1,61 @@
+{
+  "name": "wordpress-docker-stage",
+  "version": "1.0.0",
+  "description": "Automated Docker WordPress development environment with backup import. One-command setup for local WordPress staging, testing, and development.",
+  "keywords": [
+    "wordpress",
+    "docker",
+    "development-environment",
+    "wordpress-staging",
+    "lemp-stack",
+    "wordpress-migration",
+    "local-development",
+    "php-development",
+    "mysql-development",
+    "wordpress-docker",
+    "docker-compose",
+    "wordpress-automation",
+    "backup-import",
+    "url-migration",
+    "containerization",
+    "web-development",
+    "wordpress-tools",
+    "nginx",
+    "phpmyadmin",
+    "wp-cli"
+  ],
+  "homepage": "https://github.com/maxabba/WordpressStage",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxabba/WordpressStage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/maxabba/WordpressStage/issues"
+  },
+  "author": {
+    "name": "Marco Abbattista",
+    "email": "marco@example.com",
+    "url": "https://github.com/maxabba"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "./init.sh",
+    "stop": "./stop-and-clean.sh",
+    "clean": "./stop-and-clean.sh",
+    "logs": "docker-compose logs -f",
+    "status": "docker-compose ps"
+  },
+  "engines": {
+    "docker": ">=24.0.0",
+    "docker-compose": ">=2.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "directories": {
+    "doc": "./docs",
+    "example": "./input_data"
+  }
+}

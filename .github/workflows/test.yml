@@ -1,0 +1,132 @@
+name: WordPress Docker Stage Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-scripts:
+    name: Test Scripts and Configuration
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Test Docker Compose Configuration
+      run: docker-compose config
+      
+    - name: Install ShellCheck
+      run: sudo apt-get update && sudo apt-get install -y shellcheck
+      
+    - name: Test Shell Script Syntax
+      run: |
+        shellcheck init.sh
+        shellcheck stop-and-clean.sh
+        shellcheck scripts/*.sh
+        
+    - name: Test Script Permissions
+      run: |
+        test -x init.sh
+        test -x stop-and-clean.sh
+        test -x scripts/import.sh
+        test -x scripts/disable-dev-plugins.sh
+        
+    - name: Validate Package.json
+      run: |
+        if command -v node &> /dev/null; then
+          node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))"
+        else
+          python3 -c "import json; json.load(open('package.json'))"
+        fi
+
+  test-docker-build:
+    name: Test Docker Environment
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create test input data
+      run: |
+        mkdir -p input_data
+        echo "test" > input_data/test.txt
+        
+    - name: Test Docker Compose Services Start
+      run: |
+        # Start only database to test basic functionality
+        docker-compose up -d db
+        sleep 30
+        
+    - name: Test Database Connection
+      run: |
+        docker-compose exec -T db mysql -uroot -proot -e "SHOW DATABASES;"
+        
+    - name: Cleanup
+      run: docker-compose down -v
+
+  test-multi-platform:
+    name: Test on Multiple Platforms
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Test script syntax (Bash)
+      run: bash -n init.sh
+      
+    - name: Test Docker Compose config
+      run: docker-compose config
+      
+    - name: Test .env.example format
+      run: |
+        if [[ -f .env.example ]]; then
+          # Check for basic required variables
+          grep -q "PROJECT_NAME" .env.example
+          grep -q "WEB_PORT" .env.example
+          grep -q "PMA_PORT" .env.example
+        fi
+
+  documentation-check:
+    name: Documentation and Metadata Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check required files exist
+      run: |
+        test -f README.md
+        test -f LICENSE
+        test -f .gitignore
+        test -f docker-compose.yml
+        test -f .env.example
+        test -f package.json
+        
+    - name: Check README structure
+      run: |
+        grep -q "Quick Start" README.md
+        grep -q "Prerequisites" README.md
+        grep -q "Installation" README.md || grep -q "Setup" README.md
+        grep -q "Usage" README.md
+        grep -q "Troubleshooting" README.md
+        
+    - name: Check for proper markdown formatting
+      run: |
+        # Check for proper heading structure
+        grep "^# " README.md
+        grep "^## " README.md
+        
+    - name: Validate .gitignore
+      run: |
+        grep -q "data/" .gitignore
+        grep -q ".env" .gitignore
+        grep -q "*.log" .gitignore
