@@ -49,8 +49,10 @@ if [ -d data/wordpress/*/wp-content ]; then
     rm -rf data/wordpress/*/
 fi
 
-echo -e "${YELLOW}3. Copia database per import...${NC}"
-cp "$DATABASE_SQL" data/imports/
+echo -e "${YELLOW}3. Preparazione database per import...${NC}"
+# Create imports directory without copying SQL yet (to prevent auto-execution)
+mkdir -p data/imports
+# We'll copy the SQL file later after MySQL is fully started
 
 echo -e "${YELLOW}4. Impostazione permessi...${NC}"
 chmod -R 755 data/wordpress
@@ -62,8 +64,14 @@ echo "Attendo che MySQL sia pronto..."
 sleep 20
 
 echo -e "${YELLOW}6. Import database...${NC}"
+# Now copy the SQL file after MySQL is running
+echo "Copying SQL file to imports directory..."
+cp "$DATABASE_SQL" data/imports/
+
 # Create database if it doesn't exist
+echo "Creating WordPress database..."
 docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "DROP DATABASE IF EXISTS ${DB_NAME:-wordpress}; CREATE DATABASE ${DB_NAME:-wordpress} DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci;"
+
 # Import SQL (continue even if there are errors like duplicate entries)
 echo "Importing SQL file (ignoring duplicate entry errors)..."
 docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} ${DB_NAME:-wordpress} < data/imports/$(basename "$DATABASE_SQL") || echo "SQL import completed with some errors (expected for duplicate entries)"
@@ -75,45 +83,72 @@ echo -e "${YELLOW}8. Attendo che WordPress sia pronto...${NC}"
 sleep 10
 
 echo -e "${YELLOW}8.1. Configurazione database in wp-config.php...${NC}"
-# Fix wp-config.php database settings
+# Fix wp-config.php database settings (more robust patterns)
 if [ -f "data/wordpress/wp-config.php" ]; then
-    sed -i.bak "s/define( 'DB_HOST', '.*' );/define( 'DB_HOST', 'db' );/" data/wordpress/wp-config.php
-    sed -i.bak "s/define( 'DB_NAME', '.*' );/define( 'DB_NAME', '${DB_NAME:-wordpress}' );/" data/wordpress/wp-config.php
-    sed -i.bak "s/define( 'DB_USER', '.*' );/define( 'DB_USER', '${DB_USER:-wordpress}' );/" data/wordpress/wp-config.php
-    sed -i.bak "s/define( 'DB_PASSWORD', '.*' );/define( 'DB_PASSWORD', '${DB_PASSWORD:-wordpress}' );/" data/wordpress/wp-config.php
-    echo "Database configuration updated"
+    # Fix database host
+    sed -i.bak "s/define( *'DB_HOST', *'[^']*' *);/define( 'DB_HOST', 'db' );/" data/wordpress/wp-config.php
+    # Fix database name  
+    sed -i.bak "s/define( *'DB_NAME', *'[^']*' *);/define( 'DB_NAME', '${DB_NAME:-wordpress}' );/" data/wordpress/wp-config.php
+    # Fix database user
+    sed -i.bak "s/define( *'DB_USER', *'[^']*' *);/define( 'DB_USER', '${DB_USER:-wordpress}' );/" data/wordpress/wp-config.php
+    # Fix database password
+    sed -i.bak "s/define( *'DB_PASSWORD', *'[^']*' *);/define( 'DB_PASSWORD', '${DB_PASSWORD:-wordpress}' );/" data/wordpress/wp-config.php
+    
+    # Disable WP_CACHE (causes issues in dev)
+    sed -i.bak "s/define( *'WP_CACHE', *true *);/define( 'WP_CACHE', false );/" data/wordpress/wp-config.php
+    
+    echo "✓ Database configuration updated"
+else
+    echo "⚠ wp-config.php not found"
 fi
 
 echo -e "${YELLOW}9. Search and Replace URL (se configurato)...${NC}"
+# Set container name and check database status (used in multiple steps)
+CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
+TABLE_COUNT=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${DB_NAME:-wordpress}';" 2>/dev/null | tail -n 1)
+
 if [ ! -z "$SITE_URL_OLD" ] && [ ! -z "$SITE_URL_NEW" ]; then
-    # Try both HTTPS and HTTP versions of the old URL
-    docker-compose run --rm wpcli search-replace "$SITE_URL_OLD" "$SITE_URL_NEW" --all-tables
-    # Also try without protocol to catch edge cases
-    OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
-    NEW_DOMAIN=$(echo "$SITE_URL_NEW" | sed 's|https\?://||')
-    if [ "$OLD_DOMAIN" != "$NEW_DOMAIN" ]; then
-        docker-compose run --rm wpcli search-replace "$OLD_DOMAIN" "$NEW_DOMAIN" --all-tables
-    fi
     
-    # Manual fix for critical WordPress URLs to ensure site works
-    echo "Applying manual URL fixes for WordPress options..."
-    CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
-    docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "UPDATE ${DB_NAME:-wordpress}.wp_options SET option_value = '$SITE_URL_NEW' WHERE option_name IN ('siteurl', 'home');" 2>/dev/null || echo "Manual URL update completed"
+    if [ "$TABLE_COUNT" -gt 10 ]; then
+        echo "Database has $TABLE_COUNT tables, proceeding with URL replacement..."
+        
+        # Manual fix for critical WordPress URLs first (more reliable)
+        echo "Applying manual URL fixes for WordPress options..."
+        docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "UPDATE ${DB_NAME:-wordpress}.wp_options SET option_value = '$SITE_URL_NEW' WHERE option_name IN ('siteurl', 'home');" 2>/dev/null && echo "✓ Core URLs updated"
+        
+        # Try WP-CLI search-replace (may fail but that's ok)
+        echo "Attempting WP-CLI search-replace..."
+        docker-compose run --rm wpcli search-replace "$SITE_URL_OLD" "$SITE_URL_NEW" --all-tables --skip-columns=guid 2>/dev/null || echo "WP-CLI search-replace had issues (continuing anyway)"
+        
+        # Also try without protocol to catch edge cases
+        OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
+        NEW_DOMAIN=$(echo "$SITE_URL_NEW" | sed 's|https\?://||')
+        if [ "$OLD_DOMAIN" != "$NEW_DOMAIN" ]; then
+            docker-compose run --rm wpcli search-replace "$OLD_DOMAIN" "$NEW_DOMAIN" --all-tables --skip-columns=guid 2>/dev/null || echo "Domain-only replacement had issues (continuing anyway)"
+        fi
+    else
+        echo "⚠ Database appears empty ($TABLE_COUNT tables), skipping URL replacement"
+    fi
 else
     echo "Skip: SITE_URL_OLD o SITE_URL_NEW non configurati"
 fi
 
 echo -e "${YELLOW}10. Flush cache e rewrite rules...${NC}"
-docker-compose run --rm wpcli cache flush
-docker-compose run --rm wpcli rewrite flush
+# Use previously set TABLE_COUNT variable
+
+if [ "$TABLE_COUNT" -gt 10 ]; then
+    echo "Attempting cache and rewrite flush..."
+    docker-compose run --rm wpcli cache flush 2>/dev/null || echo "Cache flush had issues (continuing anyway)"
+    docker-compose run --rm wpcli rewrite flush 2>/dev/null || echo "Rewrite flush had issues (continuing anyway)"
+else
+    echo "Skipping cache/rewrite flush (database appears empty: $TABLE_COUNT tables)"
+fi
 
 echo -e "${YELLOW}11. Disabilitazione plugin problematici per sviluppo...${NC}"
 ./scripts/disable-dev-plugins.sh
 
 echo -e "${YELLOW}12. Verifica finale dell'installazione...${NC}"
-# Check if WordPress is working
-CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
-TABLE_COUNT=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${DB_NAME:-wordpress}';" 2>/dev/null | tail -n 1)
+# Use previously set variables and get user count
 USER_COUNT=$(docker-compose run --rm wpcli user list --format=count 2>/dev/null || echo "0")
 
 if [ "$TABLE_COUNT" -gt 10 ] && [ "$USER_COUNT" -gt 0 ]; then

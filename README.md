@@ -37,7 +37,7 @@ A complete Docker-based WordPress development environment that automatically imp
 
 4. **Access your site**
    - WordPress: http://localhost:8080
-   - phpMyAdmin: http://localhost:8081
+   - phpMyAdmin: http://localhost:8082
 
 That's it! The script will handle everything else automatically.
 
@@ -84,7 +84,7 @@ wordpress-docker-stage/
 The `init.sh` script will interactively ask for:
 - Project name (for container prefixes)
 - WordPress port (default: 8080)
-- phpMyAdmin port (default: 8081)
+- phpMyAdmin port (default: 8082)
 - PHP version (default: 8.1)
 - MySQL version (default: 8.0)
 - Old domain for URL migration (optional)
@@ -95,7 +95,7 @@ Copy `.env.example` to `.env` and customize as needed:
 ```bash
 PROJECT_NAME=wp
 WEB_PORT=8080
-PMA_PORT=8081
+PMA_PORT=8082
 PHP_VERSION=8.1
 MYSQL_VERSION=8.0
 ```

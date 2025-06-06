@@ -98,7 +98,7 @@ configure_environment() {
     # Default values
     DEFAULT_PROJECT_NAME="wp"
     DEFAULT_WEB_PORT="8080"
-    DEFAULT_PMA_PORT="8081"
+    DEFAULT_PMA_PORT="8082"
     DEFAULT_PHP_VERSION="8.1"
     DEFAULT_MYSQL_VERSION="8.0"
     
