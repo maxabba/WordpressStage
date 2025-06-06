@@ -22,7 +22,7 @@ A complete Docker-based WordPress development environment that automatically imp
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/wordpress-docker-stage.git
+   git clone https://github.com/maxabba/WordpressStage.git
    cd wordpress-docker-stage
    ```
 
