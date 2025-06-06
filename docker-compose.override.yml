@@ -1,0 +1,35 @@
+services:
+  # Plugin disabler service that runs on startup
+  plugin-disabler:
+    image: wordpress:cli
+    platform: linux/amd64
+    depends_on:
+      - wordpress
+      - db
+    volumes:
+      - ./data/wordpress:/var/www/html
+      - ./scripts:/scripts
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
+      WORDPRESS_DB_USER: ${DB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
+    networks:
+      - wordpress-network
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo 'Waiting for WordPress to be ready...'
+      until wp core is-installed --allow-root 2>/dev/null; do
+        sleep 5
+      done
+      echo 'Disabling problematic plugins...'
+      PLUGINS='wp-defender really-simple-ssl wp-rocket wp-smush-pro wpmudev-updates updraftplus'
+      for plugin in \$$PLUGINS; do
+        if wp plugin is-active \$$plugin --allow-root 2>/dev/null; then
+          echo \"Disabling: \$$plugin\"
+          wp plugin deactivate \$$plugin --allow-root
+        fi
+      done
+      echo 'Plugin cleanup complete!'
+      "

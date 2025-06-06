@@ -1,0 +1,102 @@
+services:
+  # Database MySQL
+  db:
+    image: mysql:${MYSQL_VERSION:-8.0}
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-wordpress}
+      MYSQL_USER: ${DB_USER:-wordpress}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-wordpress}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./data/imports:/docker-entrypoint-initdb.d
+    networks:
+      - wordpress-network
+    command: '--default-authentication-plugin=mysql_native_password'
+
+  # WordPress con PHP-FPM
+  wordpress:
+    image: wordpress:php${PHP_VERSION:-8.1}-fpm
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_wordpress
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
+      WORDPRESS_DB_USER: ${DB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
+      WORDPRESS_DEBUG: ${WP_DEBUG:-true}
+      WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX:-wp_}
+    volumes:
+      - ./data/wordpress:/var/www/html
+      - ./configs/php/custom.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+    networks:
+      - wordpress-network
+
+  # Nginx Web Server
+  nginx:
+    image: nginx:${NGINX_VERSION:-alpine}
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_nginx
+    restart: unless-stopped
+    depends_on:
+      - wordpress
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      - ./data/wordpress:/var/www/html:ro
+      - ./configs/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - wordpress-network
+
+  # phpMyAdmin
+  phpmyadmin:
+    image: phpmyadmin:${PHPMYADMIN_VERSION:-latest}
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_phpmyadmin
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      UPLOAD_LIMIT: 300M
+    ports:
+      - "${PMA_PORT:-8081}:80"
+    networks:
+      - wordpress-network
+
+  # WP-CLI per operazioni di manutenzione
+  wpcli:
+    image: wordpress:cli
+    platform: linux/amd64  # Compatibilità M1
+    container_name: ${PROJECT_NAME:-wp}_wpcli
+    depends_on:
+      - db
+      - wordpress
+    volumes:
+      - ./data/wordpress:/var/www/html
+      - ./scripts:/scripts
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
+      WORDPRESS_DB_USER: ${DB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
+    networks:
+      - wordpress-network
+    entrypoint: ["wp", "--allow-root"]
+    command: ["--info"]
+
+networks:
+  wordpress-network:
+    driver: bridge
+
+volumes:
+  db_data:
+  wordpress_data:

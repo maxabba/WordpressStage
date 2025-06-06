@@ -1,0 +1,44 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Data directories
+data/
+input_data/
+
+# WordPress files
+wp-config.php
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+error_log
+debug.log
+
+# Backups
+*.sql
+*.sql.gz
+*.zip
+*.tar.gz
+*.bak
+
+# Docker
+docker-compose.override.yml.local
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# CLAUDE.md is for local development reference
+CLAUDE.md
