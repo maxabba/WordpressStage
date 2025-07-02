@@ -9,9 +9,10 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions for caching
-RUN pecl install memcached redis \
-    && docker-php-ext-enable memcached redis
+# Install PHP extensions for caching and debugging
+RUN pecl install memcached redis xdebug \
+    && docker-php-ext-enable memcached redis \
+    && docker-php-ext-enable xdebug
 
 # Install additional useful extensions for WordPress development
 RUN docker-php-ext-install \

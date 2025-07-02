@@ -29,7 +29,11 @@ services:
 
   # WordPress con PHP-FPM e supporto cache
   wordpress:
-    image: wordpress:php${PHP_VERSION:-8.1}-fpm
+    build:
+      context: .
+      dockerfile: Dockerfile.wordpress
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.1}
     platform: linux/amd64  # Compatibilità M1
     container_name: ${PROJECT_NAME:-wp}_wordpress
     restart: unless-stopped
@@ -44,10 +48,15 @@ services:
       WORDPRESS_DEBUG: ${WP_DEBUG:-true}
       WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX:-wp_}
       MEMCACHED_HOST: memcached:11211
+      XDEBUG_MODE: ${XDEBUG_MODE:-off}
+      XDEBUG_CONFIG: "client_host=host.docker.internal client_port=9003 idekey=PHPSTORM"
     volumes:
       - ./data/wordpress:/var/www/html
       - ./configs/php/custom.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+      - ./configs/php/xdebug.ini:/usr/local/etc/php/conf.d/xdebug.ini:ro
       - ./scripts:/scripts:ro
+    ports:
+      - "${XDEBUG_PORT:-9003}:9003"
     networks:
       - wordpress-network
 
@@ -87,7 +96,11 @@ services:
 
   # WP-CLI per operazioni di manutenzione
   wpcli:
-    image: wordpress:cli
+    build:
+      context: .
+      dockerfile: Dockerfile.wordpress
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.1}
     platform: linux/amd64  # Compatibilità M1
     container_name: ${PROJECT_NAME:-wp}_wpcli
     depends_on:
@@ -95,12 +108,16 @@ services:
       - wordpress
     volumes:
       - ./data/wordpress:/var/www/html
+      - ./configs/php/xdebug-cli.ini:/usr/local/etc/php/conf.d/xdebug.ini:ro
       - ./scripts:/scripts
     environment:
       WORDPRESS_DB_HOST: db:3306
       WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
       WORDPRESS_DB_USER: ${DB_USER:-wordpress}
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
+      XDEBUG_MODE: ${XDEBUG_CLI_MODE:-off}
+      XDEBUG_CONFIG: "client_host=host.docker.internal client_port=9003 idekey=WPCLI"
+      XDEBUG_TRIGGER: ${XDEBUG_TRIGGER:-1}
     networks:
       - wordpress-network
     entrypoint: ["wp", "--allow-root"]
