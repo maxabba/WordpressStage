@@ -4,7 +4,37 @@
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
+
+# Debug mode (set DEBUG=1 for verbose output)
+DEBUG=${DEBUG:-0}
+
+debug_log() {
+    if [ "$DEBUG" = "1" ]; then
+        echo -e "${BLUE}[DEBUG]${NC} $1"
+    fi
+}
+
+print_step() {
+    echo -e "${YELLOW}$1${NC}"
+    debug_log "Starting step: $1"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+    debug_log "Success: $1"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+    debug_log "Error: $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+    debug_log "Warning: $1"
+}
 
 echo -e "${GREEN}=== WordPress Docker Import Tool ===${NC}"
 
@@ -79,12 +109,14 @@ docker-compose exec -T db mysql -uroot -p${DB_ROOT_PASSWORD:-root} ${DB_NAME:-wo
 echo -e "${YELLOW}7. Avvio WordPress e servizi...${NC}"
 docker-compose up -d
 
-echo -e "${YELLOW}8. Attendo che WordPress sia pronto...${NC}"
+print_step "8. Attendo che WordPress sia pronto..."
+debug_log "Waiting for WordPress containers to initialize..."
 sleep 10
 
-echo -e "${YELLOW}8.1. Configurazione database in wp-config.php...${NC}"
+print_step "8.1. Configurazione database in wp-config.php..."
 # Fix wp-config.php database settings (more robust patterns)
 if [ -f "data/wordpress/wp-config.php" ]; then
+    debug_log "Found wp-config.php, updating database configuration..."
     # Fix database host
     sed -i.bak "s/define( *'DB_HOST', *'[^']*' *);/define( 'DB_HOST', 'db' );/" data/wordpress/wp-config.php
     # Fix database name  
@@ -97,14 +129,14 @@ if [ -f "data/wordpress/wp-config.php" ]; then
     # Disable WP_CACHE (causes issues in dev)
     sed -i.bak "s/define( *'WP_CACHE', *true *);/define( 'WP_CACHE', false );/" data/wordpress/wp-config.php
     
-    echo "✓ Database configuration updated"
+    print_success "Database configuration updated"
 else
-    echo "⚠ wp-config.php not found"
+    print_warning "wp-config.php not found"
 fi
 
 echo -e "${YELLOW}9. Search and Replace URL (se configurato)...${NC}"
 # Set container name and check database status (used in multiple steps)
-CONTAINER_NAME="${PROJECT_NAME:-wp}_mysql"
+CONTAINER_NAME="${PROJECT_NAME:-wp}_db"
 TABLE_COUNT=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${DB_NAME:-wordpress}';" 2>/dev/null | tail -n 1)
 
 if [ ! -z "$SITE_URL_OLD" ] && [ ! -z "$SITE_URL_NEW" ]; then
@@ -165,7 +197,7 @@ if [ "${ENABLE_MEMCACHED:-true}" = "false" ]; then
     
     # Clean cache directories
     echo "Cleaning cache directories..."
-    local cache_dirs=("cache" "wp-rocket-cache" "w3tc-cache" "supercache" "wp-cache")
+    cache_dirs=("cache" "wp-rocket-cache" "w3tc-cache" "supercache" "wp-cache")
     for cache_dir in "${cache_dirs[@]}"; do
         if [ -d "data/wordpress/wp-content/$cache_dir" ]; then
             rm -rf "data/wordpress/wp-content/$cache_dir"
@@ -196,8 +228,13 @@ else
     fi
 fi
 
-echo -e "${YELLOW}12. Disabilitazione plugin problematici per sviluppo...${NC}"
-./scripts/disable-dev-plugins.sh
+print_step "12. Disabilitazione plugin problematici per sviluppo..."
+debug_log "Running plugin disable script..."
+if [ -f "./scripts/disable-dev-plugins.sh" ]; then
+    ./scripts/disable-dev-plugins.sh
+else
+    print_warning "disable-dev-plugins.sh script not found, skipping plugin disabling"
+fi
 
 echo -e "${YELLOW}13. Verifica finale dell'installazione...${NC}"
 # Use previously set variables and get user count

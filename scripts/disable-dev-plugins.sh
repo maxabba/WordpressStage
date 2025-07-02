@@ -79,10 +79,21 @@ PLUGINS_TO_DISABLE+=(
     "updraftplus" # Backup plugin not needed in dev
 )
 
-# Wait for WordPress to be ready
+# Wait for WordPress to be ready with timeout
 echo "Waiting for WordPress to be ready..."
+TIMEOUT=300  # 5 minutes timeout
+COUNTER=0
 until docker-compose run --rm wpcli core is-installed 2>/dev/null; do
+    if [ $COUNTER -ge $TIMEOUT ]; then
+        echo "⚠ Timeout waiting for WordPress to be ready after $TIMEOUT seconds"
+        echo "Attempting to continue anyway..."
+        break
+    fi
+    if [ $((COUNTER % 30)) -eq 0 ] && [ $COUNTER -gt 0 ]; then
+        echo "Still waiting for WordPress... (${COUNTER}s elapsed)"
+    fi
     sleep 2
+    COUNTER=$((COUNTER + 2))
 done
 
 echo "WordPress is ready. Disabling plugins..."
