@@ -134,38 +134,175 @@ else
     print_warning "wp-config.php not found"
 fi
 
-echo -e "${YELLOW}9. Search and Replace URL (se configurato)...${NC}"
+print_step "8.2. Aggiunta configurazioni URL forzate in wp-config.php..."
+# Force WordPress URLs to use localhost
+if [ -f "data/wordpress/wp-config.php" ]; then
+    LOCAL_URL="${SITE_URL_NEW:-http://localhost:${WEB_PORT:-8080}}"
+    
+    # Check if WP_HOME is already defined
+    if ! grep -q "define.*WP_HOME" data/wordpress/wp-config.php; then
+        debug_log "Adding WP_HOME definition..."
+        # Add after <?php tag
+        sed -i.bak "/<\?php/a\\
+define( 'WP_HOME', '$LOCAL_URL' );" data/wordpress/wp-config.php
+        print_success "Added WP_HOME: $LOCAL_URL"
+    else
+        # Update existing WP_HOME
+        sed -i.bak "s/define( *'WP_HOME', *'[^']*' *);/define( 'WP_HOME', '$LOCAL_URL' );/" data/wordpress/wp-config.php
+        print_success "Updated WP_HOME: $LOCAL_URL"
+    fi
+    
+    # Check if WP_SITEURL is already defined
+    if ! grep -q "define.*WP_SITEURL" data/wordpress/wp-config.php; then
+        debug_log "Adding WP_SITEURL definition..."
+        sed -i.bak "/<\?php/a\\
+define( 'WP_SITEURL', '$LOCAL_URL' );" data/wordpress/wp-config.php
+        print_success "Added WP_SITEURL: $LOCAL_URL"
+    else
+        # Update existing WP_SITEURL
+        sed -i.bak "s/define( *'WP_SITEURL', *'[^']*' *);/define( 'WP_SITEURL', '$LOCAL_URL' );/" data/wordpress/wp-config.php
+        print_success "Updated WP_SITEURL: $LOCAL_URL"
+    fi
+    
+    # Force disable SSL admin
+    if ! grep -q "define.*FORCE_SSL_ADMIN" data/wordpress/wp-config.php; then
+        debug_log "Adding FORCE_SSL_ADMIN = false..."
+        sed -i.bak "/<\?php/a\\
+define( 'FORCE_SSL_ADMIN', false );" data/wordpress/wp-config.php
+        print_success "Disabled SSL admin"
+    else
+        sed -i.bak "s/define( *'FORCE_SSL_ADMIN', *[^)]*);/define( 'FORCE_SSL_ADMIN', false );/" data/wordpress/wp-config.php
+        print_success "Updated FORCE_SSL_ADMIN to false"
+    fi
+fi
+
+echo -e "${YELLOW}9. Search and Replace URL completo...${NC}"
 # Set container name and check database status (used in multiple steps)
 CONTAINER_NAME="${PROJECT_NAME:-wp}_db"
 TABLE_COUNT=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${DB_NAME:-wordpress}';" 2>/dev/null | tail -n 1)
 
-if [ ! -z "$SITE_URL_OLD" ] && [ ! -z "$SITE_URL_NEW" ]; then
+if [ "$TABLE_COUNT" -gt 10 ]; then
+    # Set local URL
+    LOCAL_URL="${SITE_URL_NEW:-http://localhost:${WEB_PORT:-8080}}"
+    LOCAL_DOMAIN=$(echo "$LOCAL_URL" | sed 's|https\?://||')
     
-    if [ "$TABLE_COUNT" -gt 10 ]; then
-        echo "Database has $TABLE_COUNT tables, proceeding with URL replacement..."
-        
-        # Manual fix for critical WordPress URLs first (more reliable)
-        echo "Applying manual URL fixes for WordPress options..."
-        docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "UPDATE ${DB_NAME:-wordpress}.wp_options SET option_value = '$SITE_URL_NEW' WHERE option_name IN ('siteurl', 'home');" 2>/dev/null && echo "✓ Core URLs updated"
-        
-        # Try WP-CLI search-replace (may fail but that's ok)
-        echo "Attempting WP-CLI search-replace..."
-        docker-compose run --rm wpcli search-replace "$SITE_URL_OLD" "$SITE_URL_NEW" --all-tables --skip-columns=guid 2>/dev/null || echo "WP-CLI search-replace had issues (continuing anyway)"
-        
-        # Also try without protocol to catch edge cases
-        OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
-        NEW_DOMAIN=$(echo "$SITE_URL_NEW" | sed 's|https\?://||')
-        if [ "$OLD_DOMAIN" != "$NEW_DOMAIN" ]; then
-            docker-compose run --rm wpcli search-replace "$OLD_DOMAIN" "$NEW_DOMAIN" --all-tables --skip-columns=guid 2>/dev/null || echo "Domain-only replacement had issues (continuing anyway)"
-        fi
-    else
-        echo "⚠ Database appears empty ($TABLE_COUNT tables), skipping URL replacement"
+    echo "Target URL: $LOCAL_URL"
+    echo "Database has $TABLE_COUNT tables, proceeding with URL replacement..."
+    
+    # Step 1: Manual fix for critical WordPress URLs first (most reliable)
+    print_step "9.1. Aggiornamento URL principali nel database..."
+    docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "UPDATE ${DB_NAME:-wordpress}.wp_options SET option_value = '$LOCAL_URL' WHERE option_name IN ('siteurl', 'home');" 2>/dev/null && print_success "Core URLs updated"
+    
+    # Step 2: Find ALL old domains in the database
+    print_step "9.2. Ricerca di tutti i domini da sostituire..."
+    OLD_DOMAINS=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "
+    SELECT DISTINCT 
+        SUBSTRING_INDEX(SUBSTRING_INDEX(guid, '/', 3), '//', -1) as domain
+    FROM ${DB_NAME:-wordpress}.wp_posts 
+    WHERE guid LIKE 'http%' 
+        AND guid NOT LIKE '%${LOCAL_DOMAIN}%'
+    LIMIT 10;
+    " 2>/dev/null | tail -n +2)
+    
+    # Add configured old domain if provided
+    if [ ! -z "$SITE_URL_OLD" ]; then
+        CONFIGURED_OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
+        OLD_DOMAINS="$CONFIGURED_OLD_DOMAIN
+$OLD_DOMAINS"
     fi
+    
+    # Remove duplicates and empty lines
+    OLD_DOMAINS=$(echo "$OLD_DOMAINS" | sort -u | grep -v "^$")
+    
+    if [ ! -z "$OLD_DOMAINS" ]; then
+        echo "Domini trovati da sostituire:"
+        echo "$OLD_DOMAINS"
+        
+        # Step 3: Replace each old domain with comprehensive search-replace
+        for OLD_DOMAIN in $OLD_DOMAINS; do
+            if [ ! -z "$OLD_DOMAIN" ] && [ "$OLD_DOMAIN" != "$LOCAL_DOMAIN" ]; then
+                print_step "9.3. Sostituzione di $OLD_DOMAIN con $LOCAL_DOMAIN..."
+                
+                # Replace with HTTPS protocol
+                docker-compose run --rm wpcli search-replace "https://$OLD_DOMAIN" "$LOCAL_URL" --all-tables --skip-columns=guid 2>/dev/null || true
+                
+                # Replace with HTTP protocol
+                docker-compose run --rm wpcli search-replace "http://$OLD_DOMAIN" "$LOCAL_URL" --all-tables --skip-columns=guid 2>/dev/null || true
+                
+                # Replace protocol-relative URLs
+                docker-compose run --rm wpcli search-replace "//$OLD_DOMAIN" "//$LOCAL_DOMAIN" --all-tables --skip-columns=guid 2>/dev/null || true
+                
+                # Replace domain without protocol (for embedded references)
+                docker-compose run --rm wpcli search-replace "$OLD_DOMAIN" "$LOCAL_DOMAIN" --all-tables --skip-columns=guid 2>/dev/null || true
+                
+                print_success "Completata sostituzione per $OLD_DOMAIN"
+            fi
+        done
+    else
+        print_warning "Nessun dominio vecchio trovato nel database"
+    fi
+    
+    # Step 4: Additional replacements for common variations
+    print_step "9.4. Sostituzione varianti URL comuni..."
+    # Replace escaped URLs in JSON data
+    if [ ! -z "$SITE_URL_OLD" ]; then
+        ESCAPED_OLD=$(echo "$SITE_URL_OLD" | sed 's/\//\\\//g')
+        ESCAPED_NEW=$(echo "$LOCAL_URL" | sed 's/\//\\\//g')
+        docker-compose run --rm wpcli search-replace "$ESCAPED_OLD" "$ESCAPED_NEW" --all-tables --skip-columns=guid 2>/dev/null || true
+    fi
+    
+    # Fix any remaining localhost variations
+    docker-compose run --rm wpcli search-replace "http://localhost" "$LOCAL_URL" --all-tables --skip-columns=guid 2>/dev/null || true
+    docker-compose run --rm wpcli search-replace "https://localhost" "$LOCAL_URL" --all-tables --skip-columns=guid 2>/dev/null || true
+    
 else
-    echo "Skip: SITE_URL_OLD o SITE_URL_NEW non configurati"
+    print_warning "Database appears empty ($TABLE_COUNT tables), skipping URL replacement"
 fi
 
-echo -e "${YELLOW}10. Flush cache e rewrite rules...${NC}"
+print_step "10. Pulizia .htaccess da redirect SSL e domini..."
+# Clean .htaccess from SSL redirects and domain-specific rules
+if [ -f "./data/wordpress/.htaccess" ]; then
+    # Backup original
+    cp ./data/wordpress/.htaccess ./data/wordpress/.htaccess.backup.$(date +%s)
+    print_success "Backup .htaccess creato"
+    
+    # Remove SSL redirect rules
+    print_step "10.1. Rimozione regole SSL/HTTPS..."
+    sed -i.bak '/#\s*BEGIN\s*Really Simple SSL/,/#\s*END\s*Really Simple SSL/d' ./data/wordpress/.htaccess
+    sed -i.bak '/#\s*BEGIN\s*rlrssslReallySimpleSSL/,/#\s*END\s*rlrssslReallySimpleSSL/d' ./data/wordpress/.htaccess
+    sed -i.bak '/RewriteCond.*HTTPS.*off/d' ./data/wordpress/.htaccess
+    sed -i.bak '/RewriteRule.*https:\/\/%{HTTP_HOST}/d' ./data/wordpress/.htaccess
+    sed -i.bak '/RewriteCond.*HTTP:X-Forwarded-Proto.*!https/d' ./data/wordpress/.htaccess
+    sed -i.bak '/Header set Strict-Transport-Security/d' ./data/wordpress/.htaccess
+    sed -i.bak '/RewriteCond.*SERVER_PORT.*!443/d' ./data/wordpress/.htaccess
+    sed -i.bak '/RewriteRule.*\^(.*)$.*https:\/\//d' ./data/wordpress/.htaccess
+    
+    # Remove any specific domain redirects
+    print_step "10.2. Rimozione redirect specifici del dominio..."
+    if [ ! -z "$SITE_URL_OLD" ]; then
+        OLD_DOMAIN_CLEAN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||' | sed 's/\./\\./g')
+        sed -i.bak "/RewriteCond.*HTTP_HOST.*$OLD_DOMAIN_CLEAN/d" ./data/wordpress/.htaccess
+        sed -i.bak "/RewriteRule.*$OLD_DOMAIN_CLEAN/d" ./data/wordpress/.htaccess
+    fi
+    
+    # Remove any hardcoded domain redirects from found domains
+    if [ ! -z "$OLD_DOMAINS" ]; then
+        for domain in $OLD_DOMAINS; do
+            DOMAIN_CLEAN=$(echo "$domain" | sed 's/\./\\./g')
+            sed -i.bak "/RewriteCond.*HTTP_HOST.*$DOMAIN_CLEAN/d" ./data/wordpress/.htaccess
+            sed -i.bak "/RewriteRule.*$DOMAIN_CLEAN/d" ./data/wordpress/.htaccess
+        done
+    fi
+    
+    # Clean up empty lines
+    sed -i.bak '/^$/N;/^\n$/d' ./data/wordpress/.htaccess
+    
+    print_success ".htaccess pulito da redirect SSL e domini"
+else
+    print_warning ".htaccess non trovato"
+fi
+
+echo -e "${YELLOW}11. Flush cache e rewrite rules...${NC}"
 # Use previously set TABLE_COUNT variable
 
 if [ "$TABLE_COUNT" -gt 10 ]; then
@@ -176,86 +313,197 @@ else
     echo "Skipping cache/rewrite flush (database appears empty: $TABLE_COUNT tables)"
 fi
 
-echo -e "${YELLOW}11. Gestione file di cache e problematici...${NC}"
-# Check if cache is enabled in environment
-if [ "${ENABLE_MEMCACHED:-true}" = "false" ]; then
-    echo -e "${YELLOW}Cache disabled - removing all cache-related files...${NC}"
-    
-    # Remove object-cache.php completely when cache is disabled
-    if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
-        echo "Removing object-cache.php (cache disabled)..."
-        mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.disabled.$(date +%s)
-        echo "✓ object-cache.php disabled"
-    fi
-    
-    # Remove advanced-cache.php when cache is disabled
-    if [ -f "data/wordpress/wp-content/advanced-cache.php" ]; then
-        echo "Removing advanced-cache.php (cache disabled)..."
-        mv data/wordpress/wp-content/advanced-cache.php data/wordpress/wp-content/advanced-cache.php.disabled.$(date +%s)
-        echo "✓ advanced-cache.php disabled"
-    fi
-    
-    # Clean cache directories
-    echo "Cleaning cache directories..."
-    cache_dirs=("cache" "wp-rocket-cache" "w3tc-cache" "supercache" "wp-cache")
-    for cache_dir in "${cache_dirs[@]}"; do
-        if [ -d "data/wordpress/wp-content/$cache_dir" ]; then
-            rm -rf "data/wordpress/wp-content/$cache_dir"
-            echo "✓ Removed $cache_dir directory"
-        fi
-    done
-    
-    echo -e "${GREEN}✓ All cache files and directories removed${NC}"
-else
-    echo -e "${BLUE}Cache enabled - checking for compatibility issues...${NC}"
-    
-    # Gestione file di cache problematici prima di disabilitare i plugin
-    if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
-        echo "Trovato object-cache.php, verifica compatibilità..."
-        # Backup e rimozione se problematico
-        if grep -q "class.*Memcache\|new.*Memcache" data/wordpress/wp-content/object-cache.php 2>/dev/null; then
-            echo "Object cache potenzialmente problematico, creazione backup..."
-            mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.backup.$(date +%s)
-            echo "✓ object-cache.php salvato in backup"
-        fi
-    fi
+echo -e "${YELLOW}12. Gestione completa cache e file problematici...${NC}"
 
-    # Rimozione file advanced-cache.php vuoti
-    if [ -f "data/wordpress/wp-content/advanced-cache.php" ] && [ ! -s "data/wordpress/wp-content/advanced-cache.php" ]; then
-        echo "Rimozione advanced-cache.php vuoto..."
-        rm -f data/wordpress/wp-content/advanced-cache.php
-        echo "✓ advanced-cache.php rimosso"
-    fi
+print_step "12.1. Pulizia file di cache..."
+# Always remove problematic cache files during import
+if [ -f "data/wordpress/wp-content/object-cache.php" ]; then
+    echo "Removing object-cache.php for clean import..."
+    mv data/wordpress/wp-content/object-cache.php data/wordpress/wp-content/object-cache.php.disabled.$(date +%s)
+    print_success "object-cache.php disabled"
 fi
 
-print_step "12. Disabilitazione plugin problematici per sviluppo..."
-debug_log "Running plugin disable script..."
+if [ -f "data/wordpress/wp-content/advanced-cache.php" ]; then
+    echo "Removing advanced-cache.php for clean import..."
+    mv data/wordpress/wp-content/advanced-cache.php data/wordpress/wp-content/advanced-cache.php.disabled.$(date +%s)
+    print_success "advanced-cache.php disabled"
+fi
+
+# Clean all cache directories
+print_step "12.2. Pulizia directory di cache..."
+cache_dirs=(
+    "cache" 
+    "wp-rocket-cache" 
+    "w3tc-cache" 
+    "w3tc-config"
+    "supercache" 
+    "wp-cache"
+    "cache-enabler"
+    "hyper-cache"
+    "comet-cache"
+    "breeze-cache"
+)
+
+for cache_dir in "${cache_dirs[@]}"; do
+    if [ -d "data/wordpress/wp-content/$cache_dir" ]; then
+        rm -rf "data/wordpress/wp-content/$cache_dir"
+        print_success "Removed $cache_dir directory"
+    fi
+done
+
+# Clean transients and cache from database
+print_step "12.3. Pulizia transient e cache dal database..."
+if [ "$TABLE_COUNT" -gt 10 ]; then
+    # Delete all transients
+    docker-compose run --rm wpcli transient delete --all 2>/dev/null && print_success "Transients eliminati" || true
+    
+    # Delete expired transients from database directly
+    docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "
+    DELETE FROM ${DB_NAME:-wordpress}.wp_options 
+    WHERE option_name LIKE '_transient_%' 
+    OR option_name LIKE '_site_transient_%';
+    " 2>/dev/null && print_success "Transient database puliti" || true
+    
+    # Clear any session data
+    docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "
+    DELETE FROM ${DB_NAME:-wordpress}.wp_options 
+    WHERE option_name LIKE '_wp_session_%';
+    " 2>/dev/null && print_success "Session data puliti" || true
+fi
+
+# Additional cache flush
+docker-compose run --rm wpcli cache flush 2>/dev/null || true
+
+print_step "13. Disabilitazione plugin problematici per sviluppo..."
+debug_log "Disabling problematic plugins..."
+
+# Lista estesa di plugin SSL/sicurezza da disabilitare
+SSL_PLUGINS=(
+    "really-simple-ssl"
+    "ssl-insecure-content-fixer"
+    "wp-force-ssl"
+    "wordpress-https"
+    "one-click-ssl"
+    "wp-encrypt"
+    "ssl-zen"
+    "wp-letsencrypt-ssl"
+    "flexible-ssl-for-cloudflare"
+)
+
+# Altri plugin problematici in sviluppo locale
+PROBLEMATIC_PLUGINS=(
+    "wordfence"
+    "all-in-one-wp-security-and-firewall"
+    "sucuri-scanner"
+    "ithemes-security"
+    "bulletproof-security"
+    "wp-cerber"
+    "wp-simple-firewall"
+    "updraftplus"
+    "wp-rocket"
+    "w3-total-cache"
+    "wp-super-cache"
+    "wp-fastest-cache"
+    "litespeed-cache"
+)
+
+print_step "13.1. Disabilitazione plugin SSL..."
+for plugin in "${SSL_PLUGINS[@]}"; do
+    if docker-compose run --rm wpcli plugin is-installed "$plugin" 2>/dev/null; then
+        docker-compose run --rm wpcli plugin deactivate "$plugin" 2>/dev/null && print_success "Disabilitato: $plugin" || print_warning "Impossibile disabilitare: $plugin"
+    fi
+done
+
+print_step "13.2. Disabilitazione plugin di sicurezza e cache..."
+for plugin in "${PROBLEMATIC_PLUGINS[@]}"; do
+    if docker-compose run --rm wpcli plugin is-installed "$plugin" 2>/dev/null; then
+        docker-compose run --rm wpcli plugin deactivate "$plugin" 2>/dev/null && print_success "Disabilitato: $plugin" || print_warning "Impossibile disabilitare: $plugin"
+    fi
+done
+
+# Run additional disable script if exists
 if [ -f "./scripts/disable-dev-plugins.sh" ]; then
     ./scripts/disable-dev-plugins.sh
-else
-    print_warning "disable-dev-plugins.sh script not found, skipping plugin disabling"
 fi
 
-echo -e "${YELLOW}13. Verifica finale dell'installazione...${NC}"
+echo -e "${YELLOW}14. Verifica finale dell'installazione...${NC}"
 # Use previously set variables and get user count
 USER_COUNT=$(docker-compose run --rm wpcli user list --format=count 2>/dev/null || echo "0")
 
+print_step "14.1. Verifica configurazione database..."
 if [ "$TABLE_COUNT" -gt 10 ] && [ "$USER_COUNT" -gt 0 ]; then
-    echo -e "${GREEN}✓ Database import successful: $TABLE_COUNT tables, $USER_COUNT users${NC}"
-    SITE_URL=$(docker-compose run --rm wpcli option get home 2>/dev/null | tr -d '\r\n' || echo "Not set")
-    echo -e "${GREEN}✓ Site URL configured: $SITE_URL${NC}"
+    print_success "Database import successful: $TABLE_COUNT tables, $USER_COUNT users"
+    
+    # Verify URLs in database
+    print_step "14.2. Verifica URL nel database..."
+    CURRENT_HOME=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT option_value FROM ${DB_NAME:-wordpress}.wp_options WHERE option_name = 'home';" 2>/dev/null | tail -n 1)
+    CURRENT_SITEURL=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "SELECT option_value FROM ${DB_NAME:-wordpress}.wp_options WHERE option_name = 'siteurl';" 2>/dev/null | tail -n 1)
+    
+    echo "Database home URL: $CURRENT_HOME"
+    echo "Database site URL: $CURRENT_SITEURL"
+    
+    # Check if URLs are correctly set
+    if [[ "$CURRENT_HOME" == *"localhost"* ]] && [[ "$CURRENT_SITEURL" == *"localhost"* ]]; then
+        print_success "URL correttamente configurati per localhost"
+    else
+        print_warning "ATTENZIONE: Gli URL nel database potrebbero non essere corretti"
+        print_warning "Esegui ./scripts/fix-urls.sh per correggere"
+    fi
+    
+    # Check for remaining old URLs
+    print_step "14.3. Controllo URL vecchi residui..."
+    if [ ! -z "$SITE_URL_OLD" ]; then
+        OLD_DOMAIN=$(echo "$SITE_URL_OLD" | sed 's|https\?://||')
+        REMAINING_OLD=$(docker exec $CONTAINER_NAME mysql -uroot -p${DB_ROOT_PASSWORD:-root} -e "
+        SELECT COUNT(*) FROM ${DB_NAME:-wordpress}.wp_posts 
+        WHERE post_content LIKE '%$OLD_DOMAIN%' 
+        OR guid LIKE '%$OLD_DOMAIN%';
+        " 2>/dev/null | tail -n 1)
+        
+        if [ "$REMAINING_OLD" -gt 0 ]; then
+            print_warning "Trovati $REMAINING_OLD riferimenti al vecchio dominio nei post"
+        else
+            print_success "Nessun riferimento al vecchio dominio trovato"
+        fi
+    fi
 else
-    echo -e "${RED}⚠ Warning: Database import may have issues${NC}"
+    print_error "Warning: Database import may have issues"
+    print_error "Tables: $TABLE_COUNT, Users: $USER_COUNT"
 fi
 
+# Final check for active plugins that might cause issues
+print_step "14.4. Controllo plugin attivi problematici..."
+ACTIVE_PLUGINS=$(docker-compose run --rm wpcli plugin list --status=active --field=name 2>/dev/null || echo "")
+FOUND_ISSUES=0
+
+for plugin in really-simple-ssl ssl-insecure-content-fixer wp-force-ssl; do
+    if echo "$ACTIVE_PLUGINS" | grep -q "$plugin"; then
+        print_warning "Plugin SSL ancora attivo: $plugin"
+        FOUND_ISSUES=1
+    fi
+done
+
+if [ "$FOUND_ISSUES" -eq 0 ]; then
+    print_success "Nessun plugin SSL problematico attivo"
+fi
+
+echo ""
 echo -e "${GREEN}=== Import completato! ===${NC}"
-echo -e "WordPress: ${GREEN}http://localhost:${WEB_PORT:-8080}${NC}"
-echo -e "phpMyAdmin: ${GREEN}http://localhost:${PMA_PORT:-8082}${NC}"
-echo -e ""
+echo ""
+echo -e "Accesso al sito:"
+echo -e "  WordPress: ${GREEN}http://localhost:${WEB_PORT:-8080}${NC}"
+echo -e "  phpMyAdmin: ${GREEN}http://localhost:${PMA_PORT:-8082}${NC}"
+echo ""
 echo -e "Credenziali database:"
 echo -e "  Host: db"
 echo -e "  Database: ${DB_NAME:-wordpress}"
 echo -e "  User: ${DB_USER:-wordpress}"
 echo -e "  Password: ${DB_PASSWORD:-wordpress}"
-echo -e ""
-echo -e "${YELLOW}Note: Se vedi la schermata di installazione WordPress, pulisci la cache del browser o prova in modalità incognito${NC}"
+echo ""
+echo -e "${YELLOW}Suggerimenti per problemi di redirect:${NC}"
+echo -e "1. Pulisci cache e cookie del browser"
+echo -e "2. Prova in modalità incognito/privata"
+echo -e "3. Se il problema persiste: ${BLUE}./scripts/fix-urls.sh${NC}"
+echo -e "4. Riavvia i container: ${BLUE}docker-compose restart${NC}"
+echo ""
+echo -e "${GREEN}Buon lavoro!${NC}"
